@@ -5,6 +5,27 @@ import os
 import sys
 
 
+def _apply_resource_limits(memory_mb: int, cpu_seconds: int = 30) -> None:
+    """Apply sandbox resource caps where the host OS allows them."""
+    import resource
+
+    memory = int(memory_mb) * 1024 * 1024
+
+    def _set_limit(limit_name, soft, hard):
+        try:
+            resource.setrlimit(limit_name, (soft, hard))
+        except (ValueError, OSError):
+            # macOS often rejects RLIMIT_AS when the process already exceeds the cap,
+            # or when the limit is unsupported on the platform.
+            pass
+
+    # Linux: virtual address space cap. macOS may reject lowering from RLIM_INFINITY.
+    _set_limit(resource.RLIMIT_AS, memory, memory)
+    if hasattr(resource, "RLIMIT_DATA"):
+        _set_limit(resource.RLIMIT_DATA, memory, memory)
+    _set_limit(resource.RLIMIT_CPU, cpu_seconds, cpu_seconds)
+
+
 def main() -> None:
     module_path = os.path.abspath(sys.argv[1])
     package_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -12,10 +33,10 @@ def main() -> None:
     payload = json.load(sys.stdin)
 
     if os.name != "nt":
-        import resource
-        memory = int(payload.get("memory_mb", 256)) * 1024 * 1024
-        resource.setrlimit(resource.RLIMIT_AS, (memory, memory))
-        resource.setrlimit(resource.RLIMIT_CPU, (30, 30))
+        _apply_resource_limits(
+            int(payload.get("memory_mb", 256)),
+            int(payload.get("cpu_seconds", 30)),
+        )
 
     allowed_roots = {
         os.path.dirname(module_path),
